@@ -7,6 +7,62 @@ import rumps
 from pynput import keyboard
 from whisper import load_model
 import platform
+import math
+
+def play_tone(frequency, duration=0.067, volume=0.3):
+    """Play a tone with the given frequency, duration, and volume."""
+    try:
+        p = pyaudio.PyAudio()
+        sample_rate = 44100  # samples per second
+        
+        # Generate samples
+        samples = (np.sin(2 * np.pi * np.arange(sample_rate * duration) * frequency / sample_rate)).astype(np.float32)
+        samples = samples * volume
+        
+        # Apply envelope to avoid clicks
+        envelope = np.ones_like(samples)
+        ramp_samples = int(0.015 * sample_rate)  # 15ms ramp for smoother transition
+        if ramp_samples * 2 < len(samples):  # Ensure the envelope fits
+            envelope[:ramp_samples] = np.linspace(0, 1, ramp_samples)
+            envelope[-ramp_samples:] = np.linspace(1, 0, ramp_samples)
+        else:
+            # For very short durations, use a simpler envelope
+            mid_point = len(samples) // 2
+            envelope[:mid_point] = np.linspace(0, 1, mid_point)
+            envelope[mid_point:] = np.linspace(1, 0, len(samples) - mid_point)
+        
+        samples = samples * envelope
+        
+        # Make sure we complete the waveform cycle to avoid clicks
+        sample_length = len(samples)
+        cycles = frequency * duration
+        if not math.isclose(cycles, round(cycles), abs_tol=0.1):
+            # Adjust the final samples to complete the waveform cycle
+            last_sample_idx = int(round(cycles) * sample_rate / frequency)
+            if last_sample_idx < sample_length:
+                # Fade out the remaining samples
+                fade_len = sample_length - last_sample_idx
+                fade_envelope = np.linspace(1, 0, fade_len)
+                samples[last_sample_idx:] = samples[last_sample_idx:] * fade_envelope
+        
+        # Convert to int16
+        samples = (samples * 32767).astype(np.int16)
+        
+        # Open stream
+        stream = p.open(format=pyaudio.paInt16,
+                        channels=1,
+                        rate=sample_rate,
+                        output=True)
+        
+        # Play tone
+        stream.write(samples.tobytes())
+        
+        # Close stream
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+    except Exception as e:
+        print(f"Error playing tone: {e}")
 
 class SpeechTranscriber:
     def __init__(self, model):
@@ -124,12 +180,16 @@ class PushToTalkListener:
             current_time = time.time()
             if not self.active and current_time - self.last_press_time < 0.5:  # Double tap to activate PTT mode
                 self.active = True
+                # Play low tone when PTT is engaged
+                threading.Thread(target=play_tone, args=(300,)).start()
                 self.app.start_app(None)
             self.last_press_time = current_time
             
     def on_key_release(self, key):
         if key == self.key and self.active:
             self.active = False
+            # Play high tone when PTT is disengaged
+            threading.Thread(target=play_tone, args=(600,)).start()
             self.app.stop_app(None)
 
 class StatusBarApp(rumps.App):
