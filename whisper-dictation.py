@@ -111,6 +111,26 @@ class DoubleCommandKeyListener:
 
     def on_key_release(self, key):
         pass
+        
+class PushToTalkListener:
+    def __init__(self, app):
+        self.app = app
+        self.key = keyboard.Key.cmd_l
+        self.active = False
+        self.last_press_time = 0
+        
+    def on_key_press(self, key):
+        if key == self.key:
+            current_time = time.time()
+            if not self.active and current_time - self.last_press_time < 0.5:  # Double tap to activate PTT mode
+                self.active = True
+                self.app.start_app(None)
+            self.last_press_time = current_time
+            
+    def on_key_release(self, key):
+        if key == self.key and self.active:
+            self.active = False
+            self.app.stop_app(None)
 
 class StatusBarApp(rumps.App):
     def __init__(self, recorder, languages=None, max_time=None):
@@ -208,6 +228,9 @@ def parse_args():
     parser.add_argument('--k_double_cmd', action='store_true',
                             help='If set, use double Right Command key press on macOS to toggle the app (double click to begin recording, single click to stop recording). '
                                  'Ignores the --key_combination argument.')
+    parser.add_argument('--ptt', action='store_true',
+                            help='If set, use double tap of Left Command key to activate push-to-talk mode. Recording starts when key is held and stops when released. '
+                                 'Ignores the --key_combination and --k_double_cmd arguments.')
     parser.add_argument('-l', '--language', type=str, default=None,
                         help='Specify the two-letter language code (e.g., "en" for English) to improve recognition accuracy. '
                         'This can be especially helpful for smaller model sizes.  To see the full list of supported languages, '
@@ -239,7 +262,9 @@ if __name__ == "__main__":
     recorder = Recorder(transcriber)
     
     app = StatusBarApp(recorder, args.language, args.max_time)
-    if args.k_double_cmd:
+    if args.ptt:
+        key_listener = PushToTalkListener(app)
+    elif args.k_double_cmd:
         key_listener = DoubleCommandKeyListener(app)
     else:
         key_listener = GlobalKeyListener(app, args.key_combination)
