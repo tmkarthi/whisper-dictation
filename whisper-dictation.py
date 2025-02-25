@@ -82,6 +82,9 @@ class SpeechTranscriber:
                 time.sleep(0.0025)
             except:
                 pass
+        
+        # Transcription is complete
+        print("Transcription complete.")
 
 class Recorder:
     def __init__(self, transcriber):
@@ -312,11 +315,14 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-
+    
     print("Loading model...")
     model_name = args.model_name
     model = load_model(model_name)
     print(f"{model_name} model loaded")
+    
+    # Play tone when model is loaded and ready to transcribe
+    threading.Thread(target=play_tone, args=(500, 0.2, 0.4)).start()
     
     transcriber = SpeechTranscriber(model)
     recorder = Recorder(transcriber)
