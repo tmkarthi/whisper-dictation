@@ -4,7 +4,7 @@ import threading
 import pyaudio
 import numpy as np
 from pynput import keyboard
-from whisper import load_model
+from faster_whisper import WhisperModel
 import platform
 import math
 
@@ -62,17 +62,22 @@ class SpeechTranscriber:
         self.pykeyboard = keyboard.Controller()
 
     def transcribe(self, audio_data, language=None):
-        result = self.model.transcribe(audio_data, language=language)
+        # faster-whisper returns segments instead of a dictionary with text
+        segments, _ = self.model.transcribe(audio_data, language=language, beam_size=5)
+        text = ""
+        for segment in segments:
+            text += segment.text
+        
         is_first = True
-        for element in result["text"]:
+        for element in text:
             if is_first and element == " ":
                 is_first = False
                 continue
             try:
                 self.pykeyboard.type(element)
                 time.sleep(0.0025)
-            except:
-                pass
+            except Exception as e:
+                print(f"Error typing character: {e}")
         print("Transcription complete.")
 
 class Recorder:
@@ -106,6 +111,7 @@ class Recorder:
         stream.close()
         p.terminate()
 
+        # For faster-whisper, we can pass the audio as a numpy array
         audio_data = np.frombuffer(b''.join(frames), dtype=np.int16)
         audio_data_fp32 = audio_data.astype(np.float32) / 32768.0
         self.transcriber.transcribe(audio_data_fp32, language)
@@ -190,7 +196,7 @@ class DoubleCommandKeyListener:
 class PushToTalkListener:
     def __init__(self, recording_manager):
         self.recording_manager = recording_manager
-        self.key = keyboard.Key.cmd_l
+        self.key = keyboard.Key.cmd_r
         self.active = False
         self.last_press_time = 0
 
@@ -211,10 +217,10 @@ class PushToTalkListener:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='Dictation app using the OpenAI whisper ASR model. By default the keyboard shortcut cmd+option '
+        description='Dictation app using the faster-whisper ASR model. By default the keyboard shortcut cmd+option '
                     'starts and stops dictation')
     parser.add_argument('-m', '--model_name', type=str,
-                        choices=['tiny', 'tiny.en', 'base', 'base.en', 'small', 'small.en', 'medium', 'medium.en', 'large'],
+                        choices=['tiny', 'tiny.en', 'base', 'base.en', 'small', 'small.en', 'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3'],
                         default='base',
                         help='Specify the whisper ASR model to use.')
     parser.add_argument('-k', '--key_combination', type=str, default='cmd_l+alt' if platform.system() == 'Darwin' else 'ctrl+alt',
@@ -222,7 +228,7 @@ def parse_args():
     parser.add_argument('--k_double_cmd', action='store_true',
                         help='Use double Right Command key press to start recording, single press to stop.')
     parser.add_argument('--ptt', action='store_true',
-                        help='Use double tap of Left Command key to activate push-to-talk mode.')
+                        help='Use double tap of Right Command key to activate push-to-talk mode.')
     parser.add_argument('-l', '--language', type=str, default=None,
                         help='Specify the two-letter language code (e.g., "en" for English).')
     parser.add_argument('-t', '--max_time', type=float, default=30,
@@ -242,7 +248,9 @@ if __name__ == "__main__":
     args = parse_args()
 
     print("Loading model...")
-    model = load_model(args.model_name)
+    # Initialize faster-whisper model
+    # Use CPU by default, but you can change to 'cuda' for GPU acceleration if available
+    model = WhisperModel(args.model_name, device="cpu", compute_type="int8", download_root=None, local_files_only=False)
     print(f"{args.model_name} model loaded")
     threading.Thread(target=play_tone, args=(500, 0.2, 0.4)).start()
 
