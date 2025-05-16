@@ -8,10 +8,21 @@ from faster_whisper import WhisperModel
 import platform
 import math
 
+# Global PyAudio instance and lock
+_pyaudio_instance = None
+_pyaudio_lock = threading.Lock()
+
+def get_pyaudio_instance():
+    """Get or create a global PyAudio instance with thread safety."""
+    global _pyaudio_instance
+    with _pyaudio_lock:
+        if _pyaudio_instance is None:
+            _pyaudio_instance = pyaudio.PyAudio()
+        return _pyaudio_instance
+
 def play_tone(frequency, duration=0.067, volume=0.3):
     """Play a tone with the given frequency, duration, and volume."""
     try:
-        p = pyaudio.PyAudio()
         sample_rate = 44100  # samples per second
         
         # Generate samples
@@ -43,16 +54,18 @@ def play_tone(frequency, duration=0.067, volume=0.3):
         
         # Convert to int16
         samples = (samples * 32767).astype(np.int16)
-        
-        # Open and play stream
-        stream = p.open(format=pyaudio.paInt16,
-                        channels=1,
-                        rate=sample_rate,
-                        output=True)
-        stream.write(samples.tobytes())
-        stream.stop_stream()
-        stream.close()
-        p.terminate()
+            
+        p = get_pyaudio_instance()
+        with _pyaudio_lock:
+            # Open and play stream
+            stream = p.open(format=pyaudio.paInt16,
+                            channels=1,
+                            rate=sample_rate,
+                            output=True)
+            stream.write(samples.tobytes())
+            stream.stop_stream()
+            stream.close()
+            # Don't terminate PyAudio here as we're reusing the instance
     except Exception as e:
         print(f"Error playing tone: {e}")
 
@@ -67,6 +80,7 @@ class SpeechTranscriber:
         text = ""
         for segment in segments:
             text += segment.text
+        print("Transcribed text:", text)
         
         is_first = True
         for element in text:
@@ -78,7 +92,7 @@ class SpeechTranscriber:
                 time.sleep(0.0025)
             except Exception as e:
                 print(f"Error typing character: {e}")
-        print("Transcription complete.")
+        print("Typing complete.")
 
 class Recorder:
     def __init__(self, transcriber):
@@ -95,22 +109,31 @@ class Recorder:
     def _record_impl(self, language):
         self.recording = True
         frames_per_buffer = 1024
-        p = pyaudio.PyAudio()
-        stream = p.open(format=pyaudio.paInt16,
-                        channels=1,
-                        rate=16000,
-                        frames_per_buffer=frames_per_buffer,
-                        input=True)
-        frames = []
+        p = get_pyaudio_instance()
+        with _pyaudio_lock:
+            stream = p.open(format=pyaudio.paInt16,
+                            channels=1,
+                            rate=16000,
+                            frames_per_buffer=frames_per_buffer,
+                            input=True)
+            frames = []
 
-        while self.recording:
-            data = stream.read(frames_per_buffer)
-            frames.append(data)
-
-        stream.stop_stream()
-        stream.close()
-        p.terminate()
-
+            try:
+                i = 0
+                print("Listening...")
+                while self.recording:
+                    data = stream.read(frames_per_buffer)
+                    frames.append(data)
+                    i += 1
+                    if i % 10 == 0:
+                        print(".", end="", flush=True)
+                print()
+            finally:
+                stream.stop_stream()
+                stream.close()
+        # Don't terminate PyAudio here as we're reusing the instance
+        print("Done.")
+        print("Transcribing...")
         # For faster-whisper, we can pass the audio as a numpy array
         audio_data = np.frombuffer(b''.join(frames), dtype=np.int16)
         audio_data_fp32 = audio_data.astype(np.float32) / 32768.0
@@ -126,7 +149,6 @@ class RecordingManager:
 
     def start(self):
         if not self.recording:
-            print("Listening...")
             self.recording = True
             self.recorder.start(self.language)
             if self.max_time is not None:
@@ -137,10 +159,8 @@ class RecordingManager:
         if self.recording:
             if self.timer is not None:
                 self.timer.cancel()
-            print("Transcribing...")
             self.recording = False
             self.recorder.stop()
-            print("Done.\n")
 
     def toggle(self):
         if self.recording:
@@ -205,15 +225,15 @@ class PushToTalkListener:
             current_time = time.time()
             if not self.active and current_time - self.last_press_time < 0.5:
                 self.active = True
-                threading.Thread(target=play_tone, args=(300,)).start()
+                play_tone(300)
                 self.recording_manager.start()
             self.last_press_time = current_time
 
     def on_key_release(self, key):
         if key == self.key and self.active:
             self.active = False
-            threading.Thread(target=play_tone, args=(600,)).start()
             self.recording_manager.stop()
+            play_tone(600)
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -277,3 +297,9 @@ if __name__ == "__main__":
         listener.stop()
         if recording_manager.recording:
             recording_manager.stop()
+    finally:
+        # Clean up the global PyAudio instance
+        with _pyaudio_lock:
+            if _pyaudio_instance is not None:
+                _pyaudio_instance.terminate()
+                _pyaudio_instance = None
