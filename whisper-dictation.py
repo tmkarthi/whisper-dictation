@@ -7,6 +7,18 @@ from pynput import keyboard
 from faster_whisper import WhisperModel
 import platform
 import math
+import logging
+import sys
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Global PyAudio instance and lock
 _pyaudio_instance = None
@@ -67,7 +79,7 @@ def play_tone(frequency, duration=0.067, volume=0.3):
             stream.close()
             # Don't terminate PyAudio here as we're reusing the instance
     except Exception as e:
-        print(f"Error playing tone: {e}")
+        logger.error(f"Error playing tone: {e}")
 
 class SpeechTranscriber:
     def __init__(self, model):
@@ -80,7 +92,7 @@ class SpeechTranscriber:
         text = ""
         for segment in segments:
             text += segment.text
-        print("Transcribed text:", text)
+        logger.info(f"Transcribed text: {text}")
         
         is_first = True
         for element in text:
@@ -91,8 +103,8 @@ class SpeechTranscriber:
                 self.pykeyboard.type(element)
                 time.sleep(0.0025)
             except Exception as e:
-                print(f"Error typing character: {e}")
-        print("Typing complete.")
+                logger.error(f"Error typing character: {e}")
+        logger.info("Typing complete.")
 
 class Recorder:
     def __init__(self, transcriber):
@@ -120,7 +132,7 @@ class Recorder:
 
             try:
                 i = 0
-                print("Listening...")
+                logger.info("Listening...")
                 while self.recording:
                     data = stream.read(frames_per_buffer)
                     frames.append(data)
@@ -132,8 +144,8 @@ class Recorder:
                 stream.stop_stream()
                 stream.close()
         # Don't terminate PyAudio here as we're reusing the instance
-        print("Done.")
-        print("Transcribing...")
+        logger.info("Done.")
+        logger.info("Transcribing...")
         # For faster-whisper, we can pass the audio as a numpy array
         audio_data = np.frombuffer(b''.join(frames), dtype=np.int16)
         audio_data_fp32 = audio_data.astype(np.float32) / 32768.0
@@ -267,11 +279,11 @@ if __name__ == "__main__":
 
     args = parse_args()
 
-    print("Loading model...")
+    logger.info("Loading model...")
     # Initialize faster-whisper model
     # Use CPU by default, but you can change to 'cuda' for GPU acceleration if available
     model = WhisperModel(args.model_name, device="cpu", compute_type="int8", download_root=None, local_files_only=False)
-    print(f"{args.model_name} model loaded")
+    logger.info(f"{args.model_name} model loaded")
     threading.Thread(target=play_tone, args=(500, 0.2, 0.4)).start()
 
     transcriber = SpeechTranscriber(model)
@@ -289,11 +301,11 @@ if __name__ == "__main__":
     listener = keyboard.Listener(on_press=key_listener.on_key_press, on_release=key_listener.on_key_release)
     listener.start()
 
-    print("Running... Press Ctrl+C to exit.")
+    logger.info("Running... Press Ctrl+C to exit.")
     try:
         listener.join()
     except KeyboardInterrupt:
-        print("\nExiting...")
+        logger.info("Exiting...")
         listener.stop()
         if recording_manager.recording:
             recording_manager.stop()
